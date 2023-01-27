@@ -1,0 +1,203 @@
+version: "3"
+services:
+
+  postgres:
+    image: postgres:13-alpine
+    container_name: postgres_db
+    restart: always
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - postgres_data:/var/lib/postgresql/data/
+      - ./dummy.sql:/docker-entrypoint-initdb.d/dummy.sql
+    env_file:
+      - .postgres.env
+      - .composer.env
+    ports:
+      - ${POSTGRES_PORT}:${POSTGRES_PORT}
+
+  tg-search:
+    container_name: search
+    image: registry.gitlab.com/nelbakidze/tg-containers:tg-search-1.0-SNAPSHOT
+    volumes:
+      - /etc/localtime:/etc/localtime
+    env_file:
+      - .tg_search.env
+      - .keycloak.env
+      - .postgres.env
+      - .elastic.env
+      - .composer.env
+
+    ports:
+      - ${SEARCH_PORT}:${SEARCH_PORT}
+    depends_on:
+      - postgres
+      - mongodb
+      - elasticsearch
+
+  tg-front:
+    container_name: front
+    volumes:
+      - /etc/localtime:/etc/localtime
+    image: registry.gitlab.com/nelbakidze/tg-containers:tg-bls-front-1.0-SNAPSHOT
+    ports:
+      - ${FRONT_PORT}:3000
+    depends_on:
+      - keycloak
+
+  tg-bls:
+    container_name: bls
+    volumes:
+      - /etc/localtime:/etc/localtime
+    image: registry.gitlab.com/nelbakidze/tg-containers:tg-bls-1.0-SNAPSHOT
+    env_file:
+      - .tg_bls.env
+      - .keycloak.env
+      - .postgres.env
+      - .mongodb.env
+      - .tg_search.env
+      - .composer.env
+
+    ports:
+      - ${PORT_BLS}:${PORT_BLS}
+    depends_on:
+      - postgres
+      - tg-search
+      - mongodb
+
+  tg-scheduler:
+    container_name: scheduler
+    volumes:
+      - /etc/localtime:/etc/localtime
+    image: registry.gitlab.com/nelbakidze/tg-containers:tg-scheduler-1.0-SNAPSHOT
+    env_file:
+      - .postgres.env
+      - .mongodb.env
+      - .elastic.env
+      - .scheduler.env
+      - .composer.env
+
+    ports:
+      - ${SCHEDULER_PORT}:${SCHEDULER_PORT}
+    depends_on:
+      - keycloak
+      - postgres
+      - mongodb
+      - elasticsearch
+
+  tmodule:
+    container_name: tmodule
+    image: registry.gitlab.com/nelbakidze/transaction_module:development.v1
+    env_file:
+      - .tmodule.env
+    environment:
+      - TMODULE_PORT = ${TMODULE_PORT}
+      - TMODULE_WORKERS = ${TMODULE_WORKERS}
+    ports:
+      - ${TMODULE_PORT}:${TMODULE_PORT}
+    depends_on:
+      - keycloak
+      - postgres
+      - mongodb
+      - elasticsearch
+
+  keycloak:
+    container_name: auth
+    restart: always
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - ./themes:/opt/jboss/keycloak/themes
+      - ./realm-export.json:/opt/jboss/keycloak/imports/realm-export.json
+    command:
+        - "-b 0.0.0.0 -Dkeycloak.profile.feature.upload_scripts=enabled -Dkeycloak.import=/opt/jboss/keycloak/imports/realm-export.json"
+    image: quay.io/keycloak/keycloak:12.0.4
+    env_file:
+      - .keycloak.env
+      - .composer.env
+    ports:
+      - ${KEYCLOAK_PORT}:${KEYCLOAK_PORT}
+
+    depends_on:
+      - postgres
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongo
+    restart: always
+    env_file:
+      - .mongodb.env
+      - .composer.env
+    ports:
+      - ${MONGO_PORT}:${MONGO_PORT}
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - mongodb_data_container:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet
+      retries: 5
+      interval: 15s
+
+  check-mongodb-started:
+    image: jwilder/dockerize:0.6.1
+    depends_on:
+      - mongodb
+    command: 'dockerize -wait=tcp://mongo:27001'
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    container_name: mng-express
+    volumes:
+      - /etc/localtime:/etc/localtime
+    ports:
+      - ${MONGO_EXPRESS_PORT}:8081
+    env_file:
+      - .mongodb.env
+      - .composer.env
+    depends_on:
+      - check-mongodb-started
+
+  elasticsearch:
+    container_name: elastic-search
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.6
+    restart: always
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - elastic_data:/usr/share/elasticsearch/data
+    env_file:
+      - .elastic.env
+      - .composer.env
+    deploy:
+      resources:
+        limits:
+          memory: 4048M
+    environment:
+      - xpack.security.enabled=false
+      - "discovery.type=single-node"
+
+
+    ports:
+      - ${ELASTIC_PORT}:${ELASTIC_PORT}
+
+  kibana:
+    container_name: kibana
+    image: docker.elastic.co/kibana/kibana:7.17.7
+    restart: always
+    volumes:
+      - /etc/localtime:/etc/localtime
+    env_file:
+      - .elastic.env
+      - .composer.env
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elastic-search:${ELASTIC_PORT}
+    depends_on:
+      - elasticsearch
+    ports:
+      - ${KIBANA_PORT}:${KIBANA_PORT}
+
+
+
+volumes:
+  postgres_data:
+  mongodb_data_container:
+  elastic_data:

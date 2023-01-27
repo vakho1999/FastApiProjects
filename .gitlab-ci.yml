@@ -1,0 +1,64 @@
+
+
+variables:
+    POSTGRES_DB: tmodule
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: vaxvaxa123
+    database_hostname: postgres
+    database_port: 5432
+    database_password: vaxvaxa123
+    database_name: tmodule
+    database_username: postgres
+    mode: prod
+
+stages:
+  - test
+  - build
+
+
+services:
+    - postgres:11
+
+test:
+  stage: test
+  image: python:3.10
+  only:
+    - development
+  script:
+    - echo 'RUNNING UNIT TESTS'
+    - echo $database_name
+    - python3.10 --version
+    - pip install -r app/requirements.txt
+    - python3.10 initDB.py
+    - cd app/tests
+    - pytest --junitxml=test-results.xml
+  artifacts:
+    reports:
+      junit: test-results.xml
+
+  allow_failure: false
+
+docker-build:
+  # Use the official docker image.
+  image: docker
+  stage: build
+  only:
+    - development
+
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+
+  script:
+    - |
+      if [[ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]]; then
+        tag=""
+        echo "Running on default branch '$CI_DEFAULT_BRANCH': tag = 'latest'"
+      else
+        tag=":$CI_COMMIT_REF_SLUG"
+        echo "Running on branch '$CI_COMMIT_BRANCH': tag = $tag"
+      fi
+    - docker build --pull -t "$CI_REGISTRY_IMAGE${tag}.v1" .
+    - docker push "$CI_REGISTRY_IMAGE${tag}.v1"
+  allow_failure: false
